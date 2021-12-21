@@ -2,7 +2,7 @@
 #include <cstdlib>
 #include <string.h>
 #include <switch.h>
-#define CLK_TEST_DISPLAY_ALL_CLOCKS
+//#define CLK_TEST_DISPLAY_ALL_CLOCKS
 
 extern "C" {
 #include "rgltr.h"
