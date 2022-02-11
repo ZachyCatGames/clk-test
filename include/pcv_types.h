@@ -1,3 +1,5 @@
+#pragma once
+
 typedef enum {
     PcvPowerDomain_Max77620_Sd0  = 0,
     PcvPowerDomain_Max77620_Sd1  = 1,

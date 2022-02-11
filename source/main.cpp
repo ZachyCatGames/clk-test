@@ -1,12 +1,21 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string.h>
+#include <thread>
 #include <switch.h>
 //#define CLK_TEST_DISPLAY_ALL_CLOCKS
 
 extern "C" {
 #include "rgltr.h"
+#include "pcv.h"
 }
+
+#define R_ABORT_UNLESS_SUCCESS(r)   { \
+                                        Result res = r; \
+                                        if(R_FAILED(res)) { \
+                                            diagAbortWithResult(res); \
+                                        } \
+                                    }
 
 /* CPU/GPU clock lists. */
 constexpr static const u32 g_CpuClockList[] = { 
@@ -52,12 +61,62 @@ constexpr static const char* g_HardwareNames[] = {
     "Aula",
 };
 
+constexpr static const char* g_HardwareStates[] = {
+    "Development",
+    "Retail",
+    "Invalid",
+};
+
+constexpr static const char* g_DramIdNames[] = {
+    "EristaIcosaSamsung4gb",
+    "EristaIcosaHynix4gb",
+    "EristaIcosaMicron4gb",
+    "MarikoIowaHynix1y4gb",
+    "EristaIcosaSamsung6gb",
+    "MarikoHoagHynix1y4gb",
+    "MarikoAulaHynix1y4gb",
+    "MarikoIowax1x2Samsung4gb",
+    "MarikoIowaSamsung4gb",
+    "MarikoIowaSamsung8gb",
+    "MarikoIowaHynix4gb",
+    "MarikoIowaMicron4gb",
+    "MarikoHoagSamsung4gb",
+    "MarikoHoagSamsung8gb",
+    "MarikoHoagHynix4gb",
+    "MarikoHoagMicron4gb",
+    "MarikoIowaSamsung4gbY",
+    "MarikoIowaSamsung1y4gbX",
+    "MarikoIowaSamsung1y8gbX",
+    "MarikoHoagSamsung1y4gbX",
+    "MarikoIowaSamsung1y4gbY",
+    "MarikoIowaSamsung1y8gbY",
+    "MarikoAulaSamsung1y4gb",
+    "MarikoHoagSamsung1y8gbX",
+    "MarikoAulaSamsung1y4gbX",
+    "MarikoIowaMicron1y4gb",
+    "MarikoHoagMicron1y4gb",
+    "MarikoAulaMicron1y4gb",
+    "MarikoAulaSamsung1y8gbX",
+};
+
+constexpr static const char* g_DramIdNamesOld[] = {
+    "EristaIcosaSamsung4gb",
+    "EristaIcosaHynix4gb",
+    "EristaIcosaMicron4gb",
+    "EristaCopperSamsung4gb",
+    "EristaIcosaSamsung6gb",
+    "EristaCopperHynix4gb",
+    "EristaCopperMicron4gb",
+};
+
 void PrintMaxClocks(const bool isMariko);
 void PrintAllClocks(const bool isMariko);
 
 int main(int argc, char* argv[]) {
-    Result result;
     u64 hardwareType;
+    u64 hardwareState;
+    u64 dramId;
+    u32 hosVer;
     
     /* Initialize console. */
     consoleInit(NULL);
@@ -68,22 +127,30 @@ int main(int argc, char* argv[]) {
     padInitializeDefault(&pad);
     
     /* Initialize services. */
-    result = clkrstInitialize();
-    if(R_FAILED(result)) fatalThrow(result);
-    
-    result = rgltrInitialize();
-    if(R_FAILED(result)) fatalThrow(result);
-    
-    result = splInitialize();
-    if(R_FAILED(result)) fatalThrow(result);
-    
-    /* Get hardware type. */
-    result = splGetConfig(SplConfigItem_HardwareType, &hardwareType);
-    if(R_FAILED(result)) fatalThrow(result);
+    if(hosversionAtLeast(8,0,0)) {
+        R_ABORT_UNLESS_SUCCESS(clkrstInitialize());;
+        R_ABORT_UNLESS_SUCCESS(rgltrInitialize());
+    } else {
+        R_ABORT_UNLESS_SUCCESS(pcvInitialize());
+    }
+    R_ABORT_UNLESS_SUCCESS(splInitialize());
+
+    /* Get spl config items. */
+    R_ABORT_UNLESS_SUCCESS(splGetConfig(SplConfigItem_HardwareType, &hardwareType));
+    R_ABORT_UNLESS_SUCCESS(splGetConfig(SplConfigItem_IsRetail, &hardwareState));
+    R_ABORT_UNLESS_SUCCESS(splGetConfig(SplConfigItem_DramId, &dramId));
     const bool isMariko = hardwareType != 0 && hardwareType != 1;
 
+    /* Get HOS Version. */
+    hosVer = hosversionGet();
+
     /* Print hardware info. */
-    std::printf("Hardware Type: %ld (%s)\nSoc Type: %s\n\n", hardwareType, g_HardwareNames[hardwareType], isMariko ? "Mariko" : "Erista");
+    const auto& dramStrings = hardwareType == 1 ? g_DramIdNamesOld : g_DramIdNames;
+    std::printf("System Version: %d.%d.%d\n", HOSVER_MAJOR(hosVer), HOSVER_MINOR(hosVer), HOSVER_MICRO(hosVer));
+    std::printf("Hardware Type:  %ld (%s)\n", hardwareType, g_HardwareNames[hardwareType]);
+    std::printf("Hardware State: %ld (%s)\n", hardwareState, g_HardwareStates[hardwareState]);
+    std::printf("Dram Id:        %ld (%s)\n", dramId, dramStrings[dramId]);
+    std::printf("Soc Type: %s\n\n", isMariko ? "Mariko" : "Erista");
 
     /* Display clocks/voltages. */
 #ifdef CLK_TEST_DISPLAY_ALL_CLOCKS
@@ -102,8 +169,12 @@ int main(int argc, char* argv[]) {
     }
     
     /* Finalize services. */
-    clkrstExit();
-    rgltrExit();
+    if(hosversionAtLeast(8,0,0)) {
+        clkrstExit();
+        rgltrExit();
+    } else {
+        pcvExit();
+    }
     splExit();
     
     /* Finalize console. */
@@ -123,38 +194,62 @@ void PrintMaxClocks(const bool isMariko) {
     u32 emcVolt;
 
     /* Get max clocks and voltages at those clocks for CPU, GPU, and RAM. */
-    rgltrOpenSession(&rgltrSession, isMariko ? PcvPowerDomainId_Max77812_Cpu : PcvPowerDomainId_Max77621_Cpu);
-    clkrstOpenSession(&clkrstSession, PcvModuleId_CpuBus, 3);
-    clkrstGetClockRate(&clkrstSession, &curFreq);
-    clkrstSetClockRate(&clkrstSession, 4000000000);
-    svcSleepThread(10000000);
-    rgltrGetVoltage(&rgltrSession, &cpuVolt);
-    clkrstGetClockRate(&clkrstSession, &cpuFreq);
-    clkrstSetClockRate(&clkrstSession, curFreq);
-    clkrstCloseSession(&clkrstSession);
-    rgltrCloseSession(&rgltrSession);
+    if(hosversionAtLeast(8,0,0)) {
+        rgltrOpenSession(&rgltrSession, isMariko ? PcvPowerDomainId_Max77812_Cpu : PcvPowerDomainId_Max77621_Cpu);
+        clkrstOpenSession(&clkrstSession, PcvModuleId_CpuBus, 3);
+        clkrstGetClockRate(&clkrstSession, &curFreq);
+        clkrstSetClockRate(&clkrstSession, 0x7FFFFFFF);
+        svcSleepThread(10000000);
+        rgltrGetVoltage(&rgltrSession, &cpuVolt);
+        clkrstGetClockRate(&clkrstSession, &cpuFreq);
+        clkrstSetClockRate(&clkrstSession, curFreq);
+        clkrstCloseSession(&clkrstSession);
+        rgltrCloseSession(&rgltrSession);
 
-    rgltrOpenSession(&rgltrSession, isMariko ? PcvPowerDomainId_Max77812_Gpu : PcvPowerDomainId_Max77621_Gpu);
-    clkrstOpenSession(&clkrstSession, PcvModuleId_GPU, 3);
-    clkrstGetClockRate(&clkrstSession, &curFreq);
-    clkrstSetClockRate(&clkrstSession, 4000000000);
-    svcSleepThread(10000000);
-    rgltrGetVoltage(&rgltrSession, &gpuVolt);
-    clkrstGetClockRate(&clkrstSession, &gpuFreq);
-    clkrstSetClockRate(&clkrstSession, curFreq);
-    clkrstCloseSession(&clkrstSession);
-    rgltrCloseSession(&rgltrSession);
+        rgltrOpenSession(&rgltrSession, isMariko ? PcvPowerDomainId_Max77812_Gpu : PcvPowerDomainId_Max77621_Gpu);
+        clkrstOpenSession(&clkrstSession, PcvModuleId_GPU, 3);
+        clkrstGetClockRate(&clkrstSession, &curFreq);
+        clkrstSetClockRate(&clkrstSession, 0xFFFFFFFF);
+        svcSleepThread(10000000);
+        rgltrGetVoltage(&rgltrSession, &gpuVolt);
+        clkrstGetClockRate(&clkrstSession, &gpuFreq);
+        clkrstSetClockRate(&clkrstSession, curFreq);
+        clkrstCloseSession(&clkrstSession);
+        rgltrCloseSession(&rgltrSession);
 
-    rgltrOpenSession(&rgltrSession, isMariko ? PcvPowerDomainId_Max77812_Dram : PcvPowerDomainId_Max77620_Sd1);
-    clkrstOpenSession(&clkrstSession, PcvModuleId_EMC, 3);
-    clkrstGetClockRate(&clkrstSession, &curFreq);
-    clkrstSetClockRate(&clkrstSession, 4000000000);
-    svcSleepThread(10000000);
-    rgltrGetVoltage(&rgltrSession, &emcVolt);
-    clkrstGetClockRate(&clkrstSession, &emcFreq);
-    clkrstSetClockRate(&clkrstSession, curFreq);
-    clkrstCloseSession(&clkrstSession);
-    rgltrCloseSession(&rgltrSession);
+        rgltrOpenSession(&rgltrSession, isMariko ? PcvPowerDomainId_Max77812_Dram : PcvPowerDomainId_Max77620_Sd1);
+        clkrstOpenSession(&clkrstSession, PcvModuleId_EMC, 3);
+        clkrstGetClockRate(&clkrstSession, &curFreq);
+        clkrstSetClockRate(&clkrstSession, 0xFFFFFFFF);
+        svcSleepThread(10000000);
+        rgltrGetVoltage(&rgltrSession, &emcVolt);
+        clkrstGetClockRate(&clkrstSession, &emcFreq);
+        clkrstSetClockRate(&clkrstSession, curFreq);
+        clkrstCloseSession(&clkrstSession);
+        rgltrCloseSession(&rgltrSession);
+    } else {
+        pcvGetClockRate(PcvModule_CpuBus, &curFreq);
+        pcvSetClockRate(PcvModule_CpuBus, 0xFFFFFFFF);
+        svcSleepThread(10000000);
+        pcvGetClockRate(PcvModule_CpuBus, &cpuFreq);
+        pcvGetVoltageValue(isMariko ? PcvPowerDomain_Max77812_Cpu : PcvPowerDomain_Max77621_Cpu, &cpuVolt);
+        thread.join();
+        pcvSetClockRate(PcvModule_CpuBus, curFreq);
+
+        pcvGetClockRate(PcvModule_CpuBus, &curFreq);
+        pcvSetClockRate(PcvModule_GPU, 0xFFFFFFFF);
+        svcSleepThread(10000000);
+        pcvGetClockRate(PcvModule_GPU, &gpuFreq);
+        pcvGetVoltageValue(isMariko ? PcvPowerDomain_Max77812_Gpu : PcvPowerDomain_Max77621_Gpu, &gpuVolt);
+        pcvSetClockRate(PcvModule_GPU, curFreq);
+
+        pcvGetClockRate(PcvModule_CpuBus, &curFreq);
+        pcvSetClockRate(PcvModule_EMC, 0xFFFFFFFF);
+        svcSleepThread(10000000);
+        pcvGetClockRate(PcvModule_EMC, &emcFreq);
+        pcvGetVoltageValue(isMariko ? PcvPowerDomain_Max77812_Dram : PcvPowerDomain_Max77620_Sd1, &emcVolt);
+        pcvSetClockRate(PcvModule_EMC, curFreq);
+    }
 
     /* Print the maximum clocks and voltages obtained earlier */
     printf("Maximum Usable Clocks:\n");
