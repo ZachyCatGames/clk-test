@@ -3,7 +3,7 @@
 #include <string.h>
 #include <thread>
 #include <switch.h>
-//#define CLK_TEST_DISPLAY_ALL_CLOCKS
+#include "info.h"
 
 extern "C" {
 #include "rgltr.h"
@@ -17,98 +17,6 @@ extern "C" {
                                         } \
                                     }
 
-/* CPU/GPU clock lists. */
-constexpr static const u32 g_CpuClockList[] = { 
-    204000000, 
-    306000000, 
-    408000000, 
-    510000000, 
-    612000000, 
-    714000000, 
-    816000000, 
-    918000000, 
-    1020000000, 
-    1122000000, 
-    1224000000, 
-    1326000000, 
-    1428000000, 
-    1581000000, 
-    1683000000, 
-    1785000000,
-};
-
-constexpr static const u32 g_GpuClockList[] = {
-    76800000, 
-    153600000, 
-    230400000, 
-    307200000, 
-    384000000, 
-    460800000, 
-    537600000, 
-    614400000, 
-    691200000, 
-    768000000, 
-    844800000, 
-    921600000,
-};
-
-constexpr static const char* g_HardwareNames[] = {
-    "Icosa",
-    "Copper",
-    "Hoag",
-    "Iowa",
-    "Calcio",
-    "Aula",
-};
-
-constexpr static const char* g_HardwareStates[] = {
-    "Development",
-    "Retail",
-    "Invalid",
-};
-
-constexpr static const char* g_DramIdNames[] = {
-    "EristaIcosaSamsung4gb",
-    "EristaIcosaHynix4gb",
-    "EristaIcosaMicron4gb",
-    "MarikoIowaHynix1y4gb",
-    "EristaIcosaSamsung6gb",
-    "MarikoHoagHynix1y4gb",
-    "MarikoAulaHynix1y4gb",
-    "MarikoIowax1x2Samsung4gb",
-    "MarikoIowaSamsung4gb",
-    "MarikoIowaSamsung8gb",
-    "MarikoIowaHynix4gb",
-    "MarikoIowaMicron4gb",
-    "MarikoHoagSamsung4gb",
-    "MarikoHoagSamsung8gb",
-    "MarikoHoagHynix4gb",
-    "MarikoHoagMicron4gb",
-    "MarikoIowaSamsung4gbY",
-    "MarikoIowaSamsung1y4gbX",
-    "MarikoIowaSamsung1y8gbX",
-    "MarikoHoagSamsung1y4gbX",
-    "MarikoIowaSamsung1y4gbY",
-    "MarikoIowaSamsung1y8gbY",
-    "MarikoAulaSamsung1y4gb",
-    "MarikoHoagSamsung1y8gbX",
-    "MarikoAulaSamsung1y4gbX",
-    "MarikoIowaMicron1y4gb",
-    "MarikoHoagMicron1y4gb",
-    "MarikoAulaMicron1y4gb",
-    "MarikoAulaSamsung1y8gbX",
-};
-
-constexpr static const char* g_DramIdNamesOld[] = {
-    "EristaIcosaSamsung4gb",
-    "EristaIcosaHynix4gb",
-    "EristaIcosaMicron4gb",
-    "EristaCopperSamsung4gb",
-    "EristaIcosaSamsung6gb",
-    "EristaCopperHynix4gb",
-    "EristaCopperMicron4gb",
-};
-
 void PrintMaxClocks(const bool isMariko);
 void PrintAllClocks(const bool isMariko);
 
@@ -117,10 +25,10 @@ int main(int argc, char* argv[]) {
     u64 hardwareState;
     u64 dramId;
     u32 hosVer;
-    
+
     /* Initialize console. */
     consoleInit(NULL);
-    
+
     /* Initialize pad. */
     PadState pad;
     padConfigureInput(1, HidNpadStyleSet_NpadStandard);
@@ -152,22 +60,29 @@ int main(int argc, char* argv[]) {
     std::printf("Dram Id:        %ld (%s)\n", dramId, dramStrings[dramId]);
     std::printf("Soc Type: %s\n\n", isMariko ? "Mariko" : "Erista");
 
-    /* Display clocks/voltages. */
-#ifdef CLK_TEST_DISPLAY_ALL_CLOCKS
-    PrintAllClocks(isMariko);
-#else
-    PrintMaxClocks(isMariko);
-#endif
-    
+    /* Print instructions .*/
+    std::printf("Press B to print max clocks.\n"
+                "Press A to print available clocks (upto 1785MHz/921MHz/1600MHz CPU/GPU/EMC)\n"
+                "Press + to exit.\n");
+
     while(appletMainLoop()) {
         padUpdate(&pad);
         u64 keyDown = padGetButtonsDown(&pad);
-        
-        if(keyDown & HidNpadButton_Plus) break;
-        
+
+        if(keyDown & HidNpadButton_B) {
+            consoleClear();
+            PrintMaxClocks(isMariko);
+        }
+        else if(keyDown & HidNpadButton_A) {
+            consoleClear();
+            PrintAllClocks(isMariko);
+        }
+        else if(keyDown & HidNpadButton_Plus)
+            break;
+
         consoleUpdate(NULL);
     }
-    
+
     /* Finalize services. */
     if(hosversionAtLeast(8,0,0)) {
         clkrstExit();
@@ -176,7 +91,7 @@ int main(int argc, char* argv[]) {
         pcvExit();
     }
     splExit();
-    
+
     /* Finalize console. */
     consoleExit(NULL);
     return 0;
@@ -233,7 +148,6 @@ void PrintMaxClocks(const bool isMariko) {
         svcSleepThread(10000000);
         pcvGetClockRate(PcvModule_CpuBus, &cpuFreq);
         pcvGetVoltageValue(isMariko ? PcvPowerDomain_Max77812_Cpu : PcvPowerDomain_Max77621_Cpu, &cpuVolt);
-        thread.join();
         pcvSetClockRate(PcvModule_CpuBus, curFreq);
 
         pcvGetClockRate(PcvModule_CpuBus, &curFreq);
